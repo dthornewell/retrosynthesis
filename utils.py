@@ -11,13 +11,15 @@ from rdchiral.initialization import rdchiralReaction, rdchiralReactants
 from template_extractor import extract_from_reaction
 from rdenzyme import rdchiralRun
 import numpy as np
-import os
+from scorer import SCScorer
+
 
 class Retrosim:
-    def __init__(self, reference_data_path='data/RHEA_atom_mapped_timepoint_7_success.pkl'):
+    def __init__(self, reference_data_path='RHEA_atom_mapped_timepoint_7_success.pkl'):
         """Initialize RDEnzyme for similarity-based retrosynthesis analysis.
         
-        The template cache for each analysis is maintained in jx_cache.
+        For RDEnzyme, the template cache for each analysis is maintained in jx_cache.
+        For RetroBioCat, it is maintained in template_cache
         
         Parameters:
         reference_data_path (str): Path to reference reaction database pickle file
@@ -26,8 +28,15 @@ class Retrosim:
         self.jx_cache = {}
         self.reference_data = None
         self.load_reference_data(reference_data_path)
-        self.cofactors = pd.read_csv("data/cofactor_by_id2.csv")
-        self.cofactors = self.cofactors[['id', 'cofactors_right', 'cofactors_left']]
+
+        # for retrobiocat
+        self.template_set = pd.read_pickle('data/final_test_retrobiocat.pkl')
+        self.template_cache = {}
+        
+        # for delta scscore
+        self.model = SCScorer()
+        self.model.restore('data/model.ckpt-10654.as_numpy.json.gz')
+
 
     def load_reference_data(self, file_path):
         """Load and process reference reaction database."""
@@ -37,108 +46,56 @@ class Retrosim:
     @staticmethod
     def calculate_fingerprint(smiles):
         """Calculate Morgan fingerprint for a given SMILES string."""
-        
         fp = AllChem.GetMorganFingerprint(Chem.MolFromSmiles(smiles), 2, useChirality=True, useFeatures=True)
         return fp
-    
-    def canonicalize_smiles(self, rxn_smiles):
-        """
-        Canonicalize reaction SMILES
-        """
-        try:
-            # Split reaction into reactants and products
-            reactants, products = rxn_smiles.split('>>')
-            # Canonicalize each side
-            canon_reactants = '.'.join(sorted([Chem.MolToSmiles(Chem.MolFromSmiles(smi), canonical=True) 
-                                             for smi in reactants.split('.')]))
-            canon_products = '.'.join(sorted([Chem.MolToSmiles(Chem.MolFromSmiles(smi), canonical=True) 
-                                              for smi in products.split('.')]))
-            return f"{canon_reactants}>>{canon_products}"
-        except:
-            return rxn_smiles
+             
+    def deltascscore(self, prod, react):
+        react_list = react.split(".")
+        prod_list = prod.split(".")
+
+        react_scores = []
+        for smi in react_list:
+            can_smi = Chem.MolToSmiles(Chem.MolFromSmiles(smi))
+            (smi, sco) = self.model.get_score_from_smi(smi)
+            react_scores.append(sco)
+        react_score = max(react_scores)
+
+        prod_scores = []
+        for smi in prod_list:
+            can_smi = Chem.MolToSmiles(Chem.MolFromSmiles(smi))
+            (smi, sco) = self.model.get_score_from_smi(smi)
+            prod_scores.append(sco)
+        prod_score = max(prod_scores)
+
+        return (prod_score - react_score).item()
         
-    def add_cofactors(self, proposed, rhea_id):
-        rhea_id = int(rhea_id)
-        matching_row = self.cofactors[self.cofactors['id'] == rhea_id]
-        cofactors_right = matching_row['cofactors_right'].iloc[0]
-        cofactors_left = matching_row['cofactors_left'].iloc[0]
+    def RetroBioCat(self, prod_smiles):
 
-        proposed_left, proposed_right = proposed.split('>>')
-        if not pd.isna(cofactors_left):
-            proposed_left = proposed_left +'.'+ cofactors_left
-        if not pd.isna(cofactors_right):
-            proposed_right = proposed_right +'.'+ cofactors_right
+        can_prod_smiles = Chem.MolToSmiles(Chem.MolFromSmiles(prod_smiles), canonical=True)
+        prod = rdchiralReactants(can_prod_smiles)
 
-        full_proposed = proposed_left +'>>'+ proposed_right
+        # results storage list
+        results = []
 
-        
-        return full_proposed
-        
-    def evscorer(self, new_rxn, prec_rxn):
-        
-        # Uni-pairwise similarity
-        # reactant fp
-        rct_new_rxn_fp = self.calculate_fingerprint(new_rxn.split('>')[0])
-        rct_prec_rxn_fp = self.calculate_fingerprint(prec_rxn.split('>')[0])
+        # loop through the template set
+        for idx, name, rxn_smarts, rxn_type in self.template_set.itertuples():
+            if rxn_smarts in self.template_cache:
+                rxn = self.template_cache[rxn_smarts]
+            else:
+                # If not in cache, create and store it
+                rxn = rdchiralReaction(rxn_smarts)
+                self.template_cache[rxn_smarts] = rxn
 
-        # product fp
-        prod_new_rxn_fp = self.calculate_fingerprint(new_rxn.split('>')[2])
-        prod_prec_rxn_fp = self.calculate_fingerprint(prec_rxn.split('>')[2])
+            # apply the template
+            outcomes = rdchiralRun(rxn, prod, combine_enantiomers=False)
+            
+            for precursors in outcomes:
+                score = self.deltascscore(can_prod_smiles, precursors)
+                results.append((name, precursors, score))
 
-        # rxn fp
-        new_rxn_fp = rct_new_rxn_fp - prod_new_rxn_fp
-        prec_rxn_fp = rct_prec_rxn_fp - prod_prec_rxn_fp
-
-        # similarity calculation
-        similarity_metric = DataStructs.DiceSimilarity
-        rct_sim = similarity_metric(rct_new_rxn_fp, rct_prec_rxn_fp)
-        prod_sim = similarity_metric(prod_new_rxn_fp, prod_prec_rxn_fp)
-        overall_sim = rct_sim*prod_sim
-
-        # Bi-pairwise similarity
-        rct, _, prod = new_rxn.split('>')
-        new_rxn_flipped = prod +'>>'+ rct
-
-        flipped_rct_sim = similarity_metric(prod_new_rxn_fp, rct_prec_rxn_fp)
-        flipped_prod_sim = similarity_metric(rct_new_rxn_fp, prod_prec_rxn_fp)
-        flipped_overall_sim = flipped_rct_sim*flipped_prod_sim
-
-        # max value
-        max_val = max(overall_sim, flipped_overall_sim)
-
-        # Reaction similarity
-        rxn_sim = similarity_metric(new_rxn_fp, prec_rxn_fp)
-
-        # final score
-        final_score = (max_val + rxn_sim)/2
-
-        return final_score
+        return results     
     
-    
-    # def RetroBioCat(self, prod_smiles):
-    #     template_set = pd.read_pickle(os.getcwd()+'/retrobiocat_database.pkl')
-
-    #     can_prod_smiles = Chem.MolToSmiles(Chem.MolFromSmiles(prod_smiles), canonical=True)
-    #     prod = rdchiralReactants(can_prod_smiles)
-
-    #     # results storage list
-    #     results = []
-
-    #     # loop through the template set
-    #     for idx, name, rxn_smarts, rxn_type in template_set.itertuples():
-    #         # load reaction to RDChiral reaction
-    #         rxn = rdchiralReaction(rxn_smarts)
-
-    #         # apply the template
-    #         outcomes = rdchiralRun(rxn, prod, combine_enantiomers=False)
-    #         for precursors in outcomes:
-    #             precursors_split = precursors.split(".")
-    #             #results.append((name, rxn_type, precursors))
-    #             results.append((f"RetroBioCat ({name})", precursors_split))
-
-    #     return results
-    
-    def single_step_retro(self, target_molecule, max_precursors=50, debug=True) -> List[Tuple[str, List[str], float]]:
+    def single_step_retro(self, target_molecule, max_precursors=50, debug=True, retrobiocat=False):
         """
         Perform single-step retrosynthesis analysis on the target molecule.
         
@@ -150,7 +107,9 @@ class Retrosim:
         debug: just to help characterize problems
           
         """
-        product_smiles = [target_molecule]
+        
+        can_target_molecule = Chem.MolToSmiles(Chem.MolFromSmiles(target_molecule), canonical=True)
+        product_smiles = [can_target_molecule]
         
         #loads product SMILES into RDKit object
         ex = Chem.MolFromSmiles(target_molecule) 
@@ -161,8 +120,7 @@ class Retrosim:
         if debug:
             print(f"Analyzing product: {product_smiles[0]}") 
         
-        #This gets the precursor goal molecule, in case we already have a rxn we want to find
-
+       
         # Calculate similarities
         fp = self.calculate_fingerprint(product_smiles[0])
         sims = DataStructs.BulkDiceSimilarity(fp, [fp_ for fp_ in self.reference_data['prod_fp']])
@@ -172,6 +130,7 @@ class Retrosim:
         probs = {}
         rhea_id = {} # Store the best Rhea ID for each precursor
         rhea_history = {}
+        delta_scscore = {}
         
         # Look into each similar rxn in js
         for ji, j in enumerate(js[:max_precursors]):
@@ -184,15 +143,18 @@ class Retrosim:
                 print(f"Reference reaction: {self.reference_data['rxn_smiles'][jx]}")
             
             if jx in self.jx_cache:
-                    rxn, template, rcts_ref_fp = self.jx_cache[jx]
+                (rxn, template, rcts_ref_fp) = self.jx_cache[jx] 
             else:
                 try:
                     rxn_smiles = self.reference_data['rxn_smiles'][jx]
+
                     if isinstance(rxn_smiles, list):
                         rxn_smiles = rxn_smiles[0]
+                    elif "']" in rxn_smiles:
+                        rxn_smiles = rxn_smiles[2:-2]
 
                     rct_0, rea_0, prd_0 = rxn_smiles.split(' ')[0].split('>')
-
+                    
                     # Extract template
                     reaction = {'reactants': rct_0,'products': prd_0,'_id': self.reference_data['id'][jx]}
                     template = extract_from_reaction(reaction)
@@ -212,7 +174,7 @@ class Retrosim:
                     if debug and ji < 5:
                         print(f"Template: {template['reaction_smarts']}")
                 except:
-                    pass
+                    continue
                 
             try:
                 # Run retrosynthesis
@@ -220,37 +182,34 @@ class Retrosim:
             except Exception as e:
                 print(e)
                 outcomes = []
+
             if debug and ji < 5:
                 print(f"Number of outcomes: {len(outcomes)}")
-            
+
             # Process outcomes
             for precursors in outcomes:
+                precursors = canonicalize_smiles(precursors)
                 precursors_fp = self.calculate_fingerprint(precursors)
                 precursors_sim = DataStructs.BulkDiceSimilarity(precursors_fp, [rcts_ref_fp])[0]
-                
-                # Evscorer
-                new_rxn = precursors +'>>'+ product_smiles[0]
-                row = self.reference_data[self.reference_data['id'] == current_rhea_id].iloc[0]
-                precedent_rxn = self.canonicalize_smiles(row['not atom mapped smiles-input'])
-                new_rxn_cofactors = self.add_cofactors(new_rxn, current_rhea_id)
-                evscore = self.evscorer(new_rxn_cofactors, precedent_rxn)
-                
+
                 overall_score = precursors_sim * sims[j]
+
+                if precursors not in delta_scscore:
+                    score = self.deltascscore(can_target_molecule, precursors)
+                    delta_scscore[precursors] = score
                 
                 if precursors not in rhea_history:
                     rhea_history[precursors] = []
-                    
-                rhea_history[precursors].append({'rhea_id': current_rhea_id, 'score': overall_score, 'evolution score': evscore})
-                    
-                
+
+                rhea_history[precursors].append({'rhea_id': current_rhea_id, 'score': overall_score})
+
                 # If this precursor structure was already found through a different template/reaction
                 if precursors in probs:
                     probs[precursors] = max(probs[precursors], overall_score)
-
                 else:
                     probs[precursors] = overall_score
                     rhea_id[precursors] = current_rhea_id
-                
+
                 if debug and ji < 5:
                     print(f"Found precursor: {precursors}")
                     print(f"Score: {overall_score}")
@@ -259,23 +218,31 @@ class Retrosim:
         # Rank results
         ranked_output = []
         
+        
         # Sort RHEA histories by score for each precursor
         for precursor in rhea_history:
             rhea_history[precursor].sort(key=lambda x: x['score'], reverse=True)
         
         for r, (prec, prob) in enumerate(sorted(probs.items(), key=lambda x:x[1], reverse=True)):
-        # check if all proposed reactions have an evolution score above 0.5
-            if any(item['evolution score'] >= 0.5 for item in rhea_history[prec]):
-                ranked_output.append((
-                    #r+1,  # rank
-                    rhea_id[prec],
-                    prec.split("."),  # precursor SMILES
-                    prob,  # best probability
-                    #rhea_id[prec],  # best RHEA ID
-                    #rhea_history[prec], # full history of RHEA IDs and scores
-                ))   
+            ranked_output.append((
+                "RHEA", # Source
+                int(rhea_id[prec]),  # RHEA ID
+                prec,  # precursor SMILES
+                prob, # probability
+            ))
+
+        if retrobiocat:
+            retrobiocat_output = self.RetroBioCat(product_smiles[0])
+            for name, prec, score in retrobiocat_output:
+                if prec not in ranked_output:
+                    ranked_output.append(("RetroBioCat", name, prec, 0))  
+                    if prec not in delta_scscore:
+                        delta_scscore[prec] = score
+
+        scores = [delta_scscore[x[2]] for x in ranked_output]
         
-        return ranked_output
+        #return found_rank, product_smiles, ranked_output, prec_goal
+        return ranked_output, scores
     
     def _get_precursor_goal(self, rxn_smiles):
         """Extract and process precursor goal from reaction SMILES."""
@@ -286,7 +253,6 @@ class Retrosim:
         [a.ClearProp('molAtomMapNumber') for a in prec_goal.GetAtoms()]
         prec_goal = Chem.MolToSmiles(prec_goal, True)
         return Chem.MolToSmiles(Chem.MolFromSmiles(prec_goal), True)
-
 
 @dataclass
 class Reaction:
@@ -325,6 +291,15 @@ def check_abundant(smile:str, cursor:sqlite3.Cursor) -> bool:
     cursor.execute('SELECT 1 FROM abundant WHERE SMILES = ?', (smile,))
     result = cursor.fetchone()
     return bool(result)
+
+def weight_normalizer(weights:List) -> List:
+    """
+    Normalize a list of weights using sigmoid function
+    """
+    return [1/(1 + np.exp(-weight)) for weight in weights]
+    
+
+
 
 # Choice functions
 def complete_random(choices:List):

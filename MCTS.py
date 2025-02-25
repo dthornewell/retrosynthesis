@@ -94,7 +94,7 @@ class MCTS:
                 return PAYOUT_DEPTH_LIMIT # Too far
             if check_buyable(smile, self.buyables):
                 return PAYOUT_BUYABLE # buyable/abundant
-            reactants = self.get_random_reaction_retrobiocat(smile)
+            reactants = self.get_random_reaction_rdenzyme(smile)
             if reactants == None:
                 return PAYOUT_DEAD_END # Unmakeable (dead end)
             smile = reactants[0]

@@ -1,4 +1,5 @@
 data/
 __pycache__/
 RetroSim_Olga/
-test/
+databases/
+rdenzyme_adapted/

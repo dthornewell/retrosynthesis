@@ -20,14 +20,14 @@ class ChemNode:
     def __init__(self, smiles:str, depth:int, parent_reaction:ReactNode, buyables:sqlite3.Cursor = None, 
                  templates:pd.DataFrame = None, retrosim:Retrosim = None, abundant:sqlite3.Cursor = None):
         # Chemical data
-        self.smiles = canonicalize_smiles(smiles)
-
+        self.smiles = smiles
         self.parent_reaction = parent_reaction
         self.depth = depth
         self.reactions:List[ReactNode] = []
 
         # MCTS variables
         self.possible_reactions:List[Reaction] = []
+        self.weights:List[float] = []
         self.visits:int = 0
         self.score:float = 0.0
 
@@ -45,7 +45,7 @@ class ChemNode:
         self.solution:bool = self.buyable
 
         if (not self.solution): # If buyable, no need to generate reactions
-            self.generate_reactions_retrobiocat()
+            self.generate_reactions_rdenzyme()
 
 
     def copy(self) -> 'ChemNode':
@@ -64,25 +64,25 @@ class ChemNode:
         """
         Populate the possible reactions for this node using RetroBioCat dataset
         """
-        # if self.smiles == 'C#C[C@@](O)(COP(=O)([O-])O)[C@@H](O)CC=O':
-        #     self.possible_reactions.append(Reaction("Phosphorylation", "", "", ["C#C[C@](O)(C=O)CO"]))
         prod = rdchiralReactants(self.smiles)
         for idx, name, rxn_smarts, rxn_type in self.retrobiocat.itertuples():
             rxn = rdchiralReaction(rxn_smarts)
             outcomes = rdchiralRun(rxn, prod, combine_enantiomers=False)
             for reaction in outcomes:
-                reagents = [reagent for reagent in reaction.split('.')]
+                reagents = [canonicalize_smiles(reagent) for reagent in reaction.split('.')]
                 self.possible_reactions.append(Reaction(name, rxn_smarts, rxn_type, reagents))
-
+        n = len(self.possible_reactions)
+        self.weights = [1/n for _ in range(n)]
 
     def generate_reactions_rdenzyme(self):
         """
         Populate the possible reactions for this node using RdEnzyme
         """
-        results = ChemNode.analyzer.single_step_retro(self.smiles, max_precursors=50, debug=False)
+        results, delta_scscore = ChemNode.analyzer.single_step_retro(self.smiles, max_precursors=10, debug=False, retrobiocat=True)
+        self.weights = weight_normalizer(delta_scscore)
         for reaction in results:
             # Add abundance check here
-            self.possible_reactions.append(Reaction(reaction[0], "", "", reaction[1]))
+            self.possible_reactions.append(Reaction(reaction[1], "", reaction[0], reaction[2].split('.')))
         
     def is_buyable(self) -> bool:
         """
@@ -95,7 +95,6 @@ class ChemNode:
         Check if this node is a terminal node (solution or unmakeable)
         """
         return self.buyable or (not self.possible_reactions and not self.reactions)
-
 
     def is_fully_expanded(self):
         """
@@ -120,7 +119,6 @@ class ChemNode:
         random.shuffle(self.reactions)
         return max(self.reactions, key = lambda x : x.get_mcts_value())
     
-
     def get_best_reaction(self) -> 'ChemNode':
         """
         Get the best child node
@@ -130,77 +128,13 @@ class ChemNode:
         random.shuffle(self.reactions) # Shuffle to avoid max first pick bias
         return max(self.reactions, key = lambda x : x.get_reaction_score())
     
-
     def get_random_reaction(self) -> Reaction:
         """
         Get a random reaction
         """
         if self.is_terminal():
             return None
-        react = complete_random(self.possible_reactions)
+        react = weighted_random(self.possible_reactions, self.weights)
+        self.weights.remove(self.weights[self.possible_reactions.index(react)])
         self.possible_reactions.remove(react)
         return react
-
-"""    
-# MCTS functions
-def select(node:ChemNode) -> 'ReactNode':
-    temp = node
-    while not temp.is_terminal() and temp.is_fully_expanded():
-        temp = temp.get_MCTS_best_reaction()
-        # TODO: Need to figure out selection policy for multiple reagents
-    if not temp.is_fully_expanded():
-        return expand()
-    elif temp.is_terminal():
-        print("Terminal node reached")
-        return None
-    return temp      
-
-def expand(node:ChemNode) -> 'ChemNode':
-    react = node.get_random_reaction()
-    if react is None:
-        return None
-    # Create a new reaction node
-    node.reactions.append(react)
-    return react
-    
-def simulate(self):
-    molecule = self.smile
-    depth = self.depth
-
-    while True:
-        if depth >= MAX_DEPTH:
-            return -0.5 # Too far
-        reaction = random_reaction(molecule, ChemNode.retrobiocat, ChemNode.buyable)
-        if reaction is None:
-            return 1 # solution
-        elif reaction == []:
-            return -2 # Unmakeable
-        molecule = random.choice(reaction)
-        depth += 1      
-
-def backpropagate(self, new_score:float):
-    self.visits = self.visits + 1
-    self.score = self.score + new_score
-    if self.parent_reaction and self.parent_reaction.parent_chemical:
-        self.parent_reaction.parent_chemical.backpropagate(new_score * self.parent_reaction.weight)
-
-
-def random_reaction(smile:str, templates:pd.DataFrame, cursor:sqlite3.Cursor) -> List:
-    # If solution return None
-    if check_solution(smile, cursor):
-        return None
-    prod = rdchiralReactants(smile)
-    children = []
-    for idx, name, rxn_smarts, rxn_type in templates.itertuples():
-        rxn = rdchiralReaction(rxn_smarts)
-        outcomes = rdchiralRun(rxn, prod, combine_enantiomers=False)
-        for reagents in outcomes:
-            children.append(((name, rxn_smarts, rxn_type), reagents.split('.')))
-    
-    # If unmakeable return empty list
-    if not children:
-        return []
-
-    # Choose a random reaction
-    return random.choice(children)[1]
-"""
