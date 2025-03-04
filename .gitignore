@@ -3,3 +3,4 @@ __pycache__/
 RetroSim_Olga/
 databases/
 rdenzyme_adapted/
+test_*
