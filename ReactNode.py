@@ -45,6 +45,10 @@ class ReactNode:
         # for reagent in self.precursors:
         #     visits += reagent.visits
         #     score += reagent.score
+        
+        solution = 0
+        if self.parent_chemical.solution:
+            solution = 0.1 * self.parent_chemical.depth # Penalize solution nodes
 
         for reagent in self.precursors:
             score += reagent.get_score()
@@ -52,8 +56,10 @@ class ReactNode:
         if visits == 0:
             return float('inf')
         uct = EXPLORATION_PARAM * math.sqrt(math.log(self.parent_chemical.visits) / visits)
-        return score + uct
+        return score + uct - solution
     
+
+
     def get_reaction_score(self):
         """
         Reaction score based on reagent successes

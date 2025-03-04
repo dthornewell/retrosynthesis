@@ -11,7 +11,7 @@ from rdchiral.initialization import rdchiralReaction, rdchiralReactants
 from rdenzyme import rdchiralRun
 
 PAYOUT_DEPTH_LIMIT = 0
-PAYOUT_DEAD_END = -0.1
+PAYOUT_DEAD_END = -0.01
 PAYOUT_BUYABLE = 1
 
 # Monte Carlo Tree Search
@@ -44,31 +44,35 @@ class MCTS:
         select_stack:Deque[ChemNode] = deque()
         select_stack.append(root)
 
-        while select_stack:
-            temp = select_stack.pop()
+        while True:
+            while select_stack:
+                temp = select_stack.pop()
 
-            if temp.is_terminal():
-                if temp.is_buyable():
-                    if temp.visits == 0:
+                if temp.is_terminal():
+                    if temp.is_buyable():
+                        if temp.visits == 0:
+                            selected.append(temp)
+                    else:
                         selected.append(temp)
-                else:
-                    selected.append(temp)
-                continue
-            elif not temp.is_fully_expanded():
-                expanded = self.expand(temp)
-                if not expanded:
-                    print("Nothing expanded")
-                for child in expanded:
-                    selected.append(child)
-                continue
-            react = temp.get_MCTS_reaction()
-            for precursor in react.precursors:
-                select_stack.append(precursor)
-        if not selected:
-            print("Nothing selected")
+                    continue
+                elif not temp.is_fully_expanded():
+                    expanded = self.expand(temp)
+                    if not expanded:
+                        print("Nothing expanded")
+                    for child in expanded:
+                        selected.append(child)
+                    continue
+                react = temp.get_MCTS_reaction()
+                for precursor in react.precursors:
+                    select_stack.append(precursor)
 
-        return selected
-    
+            if selected:
+                return selected
+            else:
+                rand = random.choice(root.reactions)
+                for precursor in rand.precursors:
+                    select_stack.append(precursor)
+
     def expand(self, node:ChemNode) -> List[ChemNode]:
         """
         Expand a random child chem node 
@@ -94,10 +98,10 @@ class MCTS:
                 return PAYOUT_DEPTH_LIMIT # Too far
             if check_buyable(smile, self.buyables):
                 return PAYOUT_BUYABLE # buyable/abundant
-            reactants = self.get_random_reaction_rdenzyme(smile)
+            reactants = self.generate_random_reactions_rdenzyme(smile)
             if reactants == None:
                 return PAYOUT_DEAD_END # Unmakeable (dead end)
-            smile = reactants[0]
+            smile = complete_random(reactants)
             depth += 1
     
 
@@ -124,7 +128,7 @@ class MCTS:
                 return PAYOUT_DEPTH_LIMIT # Too far
             if check_buyable(smile, self.cursor):
                 return PAYOUT_BUYABLE # buyable
-            reactants = self.generate_random_reaction(smile)
+            reactants = self.generate_random_reactions_rdenzyme(smile)
             if reactants == None:
                 return PAYOUT_DEAD_END # Unmakeable (dead end)
             smile = reactants[0]
@@ -154,7 +158,7 @@ class MCTS:
                 self.backpropagate(node, reward)
     
 
-    def get_random_reaction_retrobiocat(self, smile:str) -> List:
+    def generate_random_reactions_retrobiocat(self, smile:str) -> List:
         """
         Get a random reaction from the retrobiocat database
         """
@@ -168,37 +172,17 @@ class MCTS:
 
         return complete_random(children)
     
-    def get_random_reaction_rdenzyme(self, smile:str) -> List:
+    def generate_random_reactions_rdenzyme(self, smile:str) -> str:
         """
         Get a random reaction from the rdenzyme database
         """
         children = []
-        results = ChemNode.analyzer.single_step_retro(smile, max_precursors=50, debug=False)
+        results, delta_scscore = ChemNode.analyzer.single_step_retro(smile, max_precursors=10, debug=False, retrobiocat=False)
         for reaction in results:
-            for reagent in reaction[1]:
+            for reagent in reaction[2].split('.'):
                 children.append(reagent)
-            
-        # Choose a completly random reaction
-        return complete_random(children)
-        
-    
 
-    # def generate_random_reaction(self, smile:str) -> List:
-    #     """
-    #     Get a random reaction
-    #     """
-    #     prod = rdchiralReactants(smile)
-    #     children = []
-    #     for idx, name, rxn_smarts, rxn_type in self.template_set.itertuples():
-    #         rxn = rdchiralReaction(rxn_smarts)
-    #         outcomes = rdchiralRun(rxn, prod, combine_enantiomers=False)
-    #         for reagents in outcomes:
-    #             children.append(reagents.split('.'))
+        if len(children) == 0:
+            return None
         
-    #     # If unmakeable return empty list
-    #     if len(children) == 0:
-    #         return None
-
-    #     # Choose a completly random reaction
-    #     return complete_random(children)
-    
+        return children

@@ -13,7 +13,7 @@ MAX_DEPTH = 6
 class ChemNode:
 
     buyables:sqlite3.Cursor = None # Cursor for buyable lookup
-    abundants:sqlite3.Cursor = None # Here to rule out simple chemicals (i.e. water, oxygen, ammonium)
+    abundants:sqlite3.Cursor = None # Here to rule out simple chemicals
     retrobiocat:pd.DataFrame = None # Retrobiocat templates
     analyzer:Retrosim = None # RdEnzyme analyzer
 

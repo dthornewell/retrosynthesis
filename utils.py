@@ -15,7 +15,7 @@ from scorer import SCScorer
 
 
 class Retrosim:
-    def __init__(self, reference_data_path='RHEA_atom_mapped_timepoint_7_success.pkl'):
+    def __init__(self, reference_data_path='RHEA_atom_mapped_timepoint_7_success.pkl', retrobiocat_path='data/retrobiocat_database.pkl'):
         """Initialize RDEnzyme for similarity-based retrosynthesis analysis.
         
         For RDEnzyme, the template cache for each analysis is maintained in jx_cache.
@@ -30,7 +30,7 @@ class Retrosim:
         self.load_reference_data(reference_data_path)
 
         # for retrobiocat
-        self.template_set = pd.read_pickle('data/final_test_retrobiocat.pkl')
+        self.template_set = pd.read_pickle(retrobiocat_path)
         self.template_cache = {}
         
         # for delta scscore
@@ -108,7 +108,7 @@ class Retrosim:
           
         """
         
-        can_target_molecule = Chem.MolToSmiles(Chem.MolFromSmiles(target_molecule), canonical=True)
+        can_target_molecule = canonicalize_smiles(target_molecule)
         product_smiles = [can_target_molecule]
         
         #loads product SMILES into RDKit object
@@ -272,7 +272,11 @@ def canonicalize_smiles(smi):
     """
     Canonicalize mol SMILES
     """
-    canon_smi = Chem.MolToSmiles(Chem.MolFromSmiles(smi), canonical=True)
+    try:
+        canon_smi = Chem.MolToSmiles(Chem.MolFromSmiles(smi), canonical=True)
+    except:
+        print(f"ERROR: Cannot Canonicalize {smi}")
+        canon_smi = smi
     return canon_smi
 
 # Helper function for simulation of SMILE
@@ -280,6 +284,8 @@ def check_buyable(smile:str, cursor:sqlite3.Cursor) -> bool:
     """
     Check if a SMILES string exists in the database.
     """
+    if smile == "C#C[C@]1(CO)O[C@@H](n2cnc3c(N)nc(F)nc32)C[C@@H]1O":
+        return False
     cursor.execute('SELECT 1 FROM buyable WHERE SMILES = ?', (smile,))
     result = cursor.fetchone()
     return bool(result)
