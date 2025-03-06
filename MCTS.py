@@ -23,7 +23,7 @@ class MCTS:
         self.max_depth = max_depth
         self.exploration_param = exploration_param
         self.buyables:sqlite3.Cursor = ChemNode.buyables
-        self.abundants:sqlite3.Cursor = ChemNode.abundants
+        self.excluded:sqlite3.Cursor = ChemNode.excluded
         self.template_set:pd.DataFrame = ChemNode.retrobiocat
         self.analyzer:Retrosim = ChemNode.analyzer
 
@@ -96,7 +96,7 @@ class MCTS:
         while True:
             if depth >= self.max_depth:
                 return PAYOUT_DEPTH_LIMIT # Too far
-            if check_buyable(smile, self.buyables):
+            if check_buyable(smile, self.buyables, self.excluded):
                 return PAYOUT_BUYABLE # buyable/abundant
             reactants = self.generate_random_reactions_rdenzyme(smile)
             if reactants == None:
@@ -126,7 +126,7 @@ class MCTS:
         while True:
             if depth >= self.max_depth:
                 return PAYOUT_DEPTH_LIMIT # Too far
-            if check_buyable(smile, self.cursor):
+            if check_buyable(smile, self.buyables, self.excluded):
                 return PAYOUT_BUYABLE # buyable
             reactants = self.generate_random_reactions_rdenzyme(smile)
             if reactants == None:

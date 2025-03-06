@@ -279,24 +279,22 @@ def canonicalize_smiles(smi):
         canon_smi = smi
     return canon_smi
 
-# Helper function for simulation of SMILE
-def check_buyable(smile:str, cursor:sqlite3.Cursor) -> bool:
+
+def check_in(smile:str, cursor:sqlite3.Cursor, table_name:str) -> bool:
     """
     Check if a SMILES string exists in the database.
     """
-    if smile == "C#C[C@]1(CO)O[C@@H](n2cnc3c(N)nc(F)nc32)C[C@@H]1O":
-        return False
-    cursor.execute('SELECT 1 FROM buyable WHERE SMILES = ?', (smile,))
+    cursor.execute(f'SELECT 1 FROM {table_name} WHERE SMILES = ?', (smile,))
     result = cursor.fetchone()
     return bool(result)
 
-def check_abundant(smile:str, cursor:sqlite3.Cursor) -> bool:
+def check_buyable(smile:str, buyables:sqlite3.Cursor, excluded:sqlite3.Cursor) -> bool:
     """
-    Check if a SMILES string exists in the database.
+    Check if a SMILES string is buyable.
     """
-    cursor.execute('SELECT 1 FROM abundant WHERE SMILES = ?', (smile,))
-    result = cursor.fetchone()
-    return bool(result)
+    if check_in(smile, excluded, 'excluded'):
+        return False
+    return check_in(smile, buyables, 'buyable')
 
 def weight_normalizer(weights:List) -> List:
     """
@@ -304,7 +302,6 @@ def weight_normalizer(weights:List) -> List:
     """
     return [1/(1 + np.exp(-weight)) for weight in weights]
     
-
 
 
 # Choice functions

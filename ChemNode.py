@@ -13,12 +13,12 @@ MAX_DEPTH = 6
 class ChemNode:
 
     buyables:sqlite3.Cursor = None # Cursor for buyable lookup
-    abundants:sqlite3.Cursor = None # Here to rule out simple chemicals
+    excluded:sqlite3.Cursor = None # Here to rule out simple chemicals
     retrobiocat:pd.DataFrame = None # Retrobiocat templates
     analyzer:Retrosim = None # RdEnzyme analyzer
 
     def __init__(self, smiles:str, depth:int, parent_reaction:ReactNode, buyables:sqlite3.Cursor = None, 
-                 templates:pd.DataFrame = None, retrosim:Retrosim = None, abundant:sqlite3.Cursor = None):
+                 templates:pd.DataFrame = None, retrosim:Retrosim = None, excluded:sqlite3.Cursor = None):
         # Chemical data
         self.smiles = smiles
         self.parent_reaction = parent_reaction
@@ -34,14 +34,14 @@ class ChemNode:
         # Needed for buyable lookup and reaction generation
         if buyables is not None:
             ChemNode.buyables = buyables
-        if abundant is not None:
-            ChemNode.abundants = abundant
+        if excluded is not None:
+            ChemNode.excluded = excluded
         if templates is not None:
             ChemNode.retrobiocat = templates
         if retrosim is not None:
             ChemNode.analyzer = retrosim
 
-        self.buyable:bool = check_buyable(smiles, ChemNode.buyables)
+        self.buyable:bool = check_buyable(smiles, ChemNode.buyables, ChemNode.excluded)
         self.solution:bool = self.buyable
 
         if (not self.solution): # If buyable, no need to generate reactions
@@ -138,3 +138,4 @@ class ChemNode:
         self.weights.remove(self.weights[self.possible_reactions.index(react)])
         self.possible_reactions.remove(react)
         return react
+    
