@@ -27,6 +27,9 @@ class MCTS:
         self.template_set:pd.DataFrame = ChemNode.retrobiocat
         self.analyzer:Retrosim = ChemNode.analyzer
 
+        if len(self.root.reactions) == 0:
+            print("Root is buyable")
+
 
     # def select(self, root:ChemNode) -> 'ReactNode':
     #     temp = root
